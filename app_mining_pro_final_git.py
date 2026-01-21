@@ -43,7 +43,6 @@ def get_regime_data():
     tickers = list(COMMODITY_CONFIG.values())
     df = yf.download(tickers, start="2022-01-01", auto_adjust=True)['Close']
     inv_map = {v: k for k, v in COMMODITY_CONFIG.items()}
-    # Keep NaNs to prevent "sample shrink"; handle per-asset later
     df = df.rename(columns=inv_map).ffill()
     return df[df.index >= "2023-01-01"]
 
@@ -51,21 +50,27 @@ df_prices = get_regime_data()
 df_returns = 100 * np.log(df_prices / df_prices.shift(1))
 
 def st_altair_line(df, title):
-    df_reset = df.reset_index().melt('Date', var_name='Commodity', value_name='Value')
+    # CRITICAL FIX: Only drop rows where EVERY asset is NaN.
+    # This clips the leading empty year for the Sharpe chart 
+    # but keeps the full 3-year history for the Horse Race.
+    df_plot = df.dropna(how='all')
     
-    # Calculate how many unique years are in the data to set the right number of ticks
-    num_years = df.index.year.nunique()
-    
+    if df_plot.empty:
+        st.warning(f"No valid data points found for: {title}")
+        return
+
+    df_reset = df_plot.reset_index().melt('Date', var_name='Commodity', value_name='Value')
+    num_years = df_plot.index.year.nunique()
     domain = list(COLOR_MAP.keys())
-    range_colors = [COLOR_MAP[d] for d in domain]
+    range_colors = [COLOR_MAP.get(d, "#FFFFFF") for d in domain]
     
+    # Altair will now automatically 'fit' the X-axis to the data range
     chart = alt.Chart(df_reset).mark_line().encode(
-        # FIX: We use 'tickCount' set to the number of years to avoid repeats
         x=alt.X('Date:T', 
+                title=None,
                 axis=alt.Axis(format='%Y', 
                               tickCount=num_years, 
-                              labelAngle=0, 
-                              title=None)),
+                              labelAngle=0)),
         y=alt.Y('Value:Q', title=None, scale=alt.Scale(zero=False)),
         color=alt.Color('Commodity:N', scale=alt.Scale(domain=domain, range=range_colors))
     ).properties(title=title, height=450).interactive()
@@ -76,15 +81,16 @@ def st_altair_line(df, title):
 # 3. GLOBAL PERFORMANCE & EFFICIENCY
 # ==========================================
 st.title("The 'Horse Race' of major commodities (Base 100)") 
-# Fix: Correct Log-Return Compounding
 df_cum_rets = np.exp(df_returns.cumsum() / 100) * 100
 st_altair_line(df_cum_rets, "Growth Attribution (Mathematical Price Path)")
 
 st.title("Rolling Risk-Adjusted Efficiency (Sharpe)")
+# The 252-day window is what caused the 'empty' gap on the left.
+# st_altair_line will now clip that gap so the chart fills the screen.
 roll_mean = df_returns.rolling(252).mean() * 252
 roll_std = df_returns.rolling(252).std() * np.sqrt(252)
-df_sharpe = (roll_mean / roll_std).dropna()
-st_altair_line(df_sharpe, "252-Day Rolling Sharpe (Note: First year is lookback window)")
+df_sharpe = (roll_mean / roll_std)
+st_altair_line(df_sharpe, "252-Day Rolling Sharpe (Real-Time Relative Efficiency)")
 
 # ==========================================
 # 4. GLOBAL RISK LEADERBOARD
