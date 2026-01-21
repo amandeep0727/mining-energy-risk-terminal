@@ -1,0 +1,9 @@
+streamlit
+yfinance
+pandas
+numpy
+arch
+scipy
+matplotlib
+seaborn
+altair
